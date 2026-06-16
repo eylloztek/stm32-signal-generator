@@ -31,6 +31,11 @@ uint8_t onoffFlag = 1;
 static uint8_t frequencyScreenNeedsUpdate = 1;
 static uint8_t dutyCycleScreenNeedsUpdate = 1;
 
+#define ABOUT_PAGE_COUNT        2U
+
+static uint8_t aboutPage = 0;
+static uint8_t aboutScreenNeedsUpdate = 1;
+
 typedef struct {
 	GPIO_PinState lastRawState;
 	GPIO_PinState stableState;
@@ -217,8 +222,23 @@ static void enterDutyCycleMenu(void) {
  * @brief Opens the about page.
  */
 static void enterAboutMenu(void) {
+	aboutPage = 0;
+	aboutScreenNeedsUpdate = 1;
+
 	while (1) {
 		showAbout();
+
+		if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
+		MENU_BUTTON_Pin,
+		MENU_BUTTON_ACTIVE_STATE, &menuButtonState)) {
+			aboutPage++;
+
+			if (aboutPage >= ABOUT_PAGE_COUNT) {
+				aboutPage = 0;
+			}
+
+			aboutScreenNeedsUpdate = 1;
+		}
 
 		if (Button_WasClicked(select_GPIO_Port,
 		select_Pin,
@@ -363,15 +383,58 @@ void setDutyCycle(void) {
 }
 
 void showAbout(void) {
+	char buffer[24];
+
+	if (!aboutScreenNeedsUpdate) {
+		return;
+	}
+
 	ssd1306_Fill(Black);
 
-	ssd1306_SetCursor(0, 0);
-	ssd1306_WriteString("Signal Generator", Font_7x10, White);
+	if (aboutPage == 0) {
+		ssd1306_SetCursor(0, 0);
+		ssd1306_WriteString("Signal Generator", Font_7x10, White);
 
-	ssd1306_SetCursor(0, 17);
-	ssd1306_WriteString("STM32F446RE", Font_7x10, White);
+		ssd1306_SetCursor(0, 12);
+		ssd1306_WriteString("STM32 Nucleo", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 24);
+		ssd1306_WriteString("F446RE / TIM4 PWM", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 36);
+		snprintf(buffer, sizeof(buffer), "Freq:%luHz",
+				(unsigned long) frequency);
+		ssd1306_WriteString(buffer, Font_7x10, White);
+
+		ssd1306_SetCursor(0, 48);
+		snprintf(buffer, sizeof(buffer), "Duty:%lu%%",
+				(unsigned long) dutyCycle);
+		ssd1306_WriteString(buffer, Font_7x10, White);
+
+		ssd1306_SetCursor(86, 48);
+		ssd1306_WriteString("1/2", Font_7x10, White);
+	} else {
+		ssd1306_SetCursor(0, 0);
+		ssd1306_WriteString("Controls", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 12);
+		ssd1306_WriteString("MENU : Next/+", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 24);
+		ssd1306_WriteString("ONOFF: Output/-", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 36);
+		ssd1306_WriteString("SEL  : Enter/Back", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 48);
+		ssd1306_WriteString("M:Next S:Back", Font_7x10, White);
+
+		ssd1306_SetCursor(98, 48);
+		ssd1306_WriteString("2/2", Font_7x10, White);
+	}
 
 	ssd1306_UpdateScreen();
+	aboutScreenNeedsUpdate = 0;
 }
 
 void showInfo(void) {
