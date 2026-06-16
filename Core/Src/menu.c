@@ -13,9 +13,23 @@ static const char *main_menu_items[] = { "Set Frequency", "Set DutyCycle",
 		"About" };
 
 uint8_t selectedMenuItem = 0;
-uint32_t frequency = 0;
-uint32_t dutyCycle = 0;
+uint32_t frequency = 1000U;
+uint32_t dutyCycle = 50U;
 uint8_t onoffFlag = 1;
+
+/*
+ * Frequency settings
+ */
+#define FREQUENCY_MIN_HZ       1U
+#define FREQUENCY_MAX_HZ       100000U
+#define FREQUENCY_STEP_HZ      100U
+
+#define DUTYCYCLE_MIN_PERCENT       0U
+#define DUTYCYCLE_MAX_PERCENT       100U
+#define DUTYCYCLE_STEP_PERCENT      5U
+
+static uint8_t frequencyScreenNeedsUpdate = 1;
+static uint8_t dutyCycleScreenNeedsUpdate = 1;
 
 typedef struct {
 	GPIO_PinState lastRawState;
@@ -98,6 +112,48 @@ void printMenuItems(uint8_t menuCount) {
 }
 
 /**
+ * @brief Displays the frequency setting screen.
+ */
+static void displayFrequencyScreen(void) {
+	char buffer[24];
+
+	ssd1306_Fill(Black);
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Set Frequency", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 20);
+	snprintf(buffer, sizeof(buffer), "%lu Hz", (unsigned long) frequency);
+	ssd1306_WriteString(buffer, Font_7x10, White);
+
+	ssd1306_SetCursor(0, 40);
+	ssd1306_WriteString("M:+ O:- S:Back", Font_7x10, White);
+
+	ssd1306_UpdateScreen();
+}
+
+/**
+ * @brief Displays the duty cycle setting screen.
+ */
+static void displayDutyCycleScreen(void) {
+	char buffer[24];
+
+	ssd1306_Fill(Black);
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Set DutyCycle", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 20);
+	snprintf(buffer, sizeof(buffer), "%lu %%", (unsigned long) dutyCycle);
+	ssd1306_WriteString(buffer, Font_7x10, White);
+
+	ssd1306_SetCursor(0, 40);
+	ssd1306_WriteString("M:+ O:- S:Back", Font_7x10, White);
+
+	ssd1306_UpdateScreen();
+}
+
+/**
  * @brief Toggles the PWM output on or off.
  */
 static void toggleOutput(void) {
@@ -115,9 +171,12 @@ static void toggleOutput(void) {
  * @brief Opens the frequency setting menu.
  */
 static void enterFrequencyMenu(void) {
+	frequencyScreenNeedsUpdate = 1;
+
 	while (1) {
 		if (onoffFlag == 0) {
 			showInfo();
+			HAL_Delay(700);
 			break;
 		}
 
@@ -135,9 +194,12 @@ static void enterFrequencyMenu(void) {
  * @brief Opens the duty cycle setting menu.
  */
 static void enterDutyCycleMenu(void) {
+	dutyCycleScreenNeedsUpdate = 1;
+
 	while (1) {
 		if (onoffFlag == 0) {
 			showInfo();
+			HAL_Delay(700);
 			break;
 		}
 
@@ -158,7 +220,8 @@ static void enterAboutMenu(void) {
 	while (1) {
 		showAbout();
 
-		if (Button_WasClicked(select_GPIO_Port, select_Pin,
+		if (Button_WasClicked(select_GPIO_Port,
+		select_Pin,
 		SELECT_ACTIVE_STATE, &selectButtonState)) {
 			break;
 		}
@@ -168,10 +231,9 @@ static void enterAboutMenu(void) {
 /**
  * @brief Handles menu navigation and menu selection.
  *
- * Rotary encoder based navigation was removed.
  * The MENU button moves the selected item down by one step.
  * The SELECT button enters the selected menu item.
- * The ON/OFF button toggles the PWM output.
+ * The ON/OFF button toggles the PWM output only in the main menu.
  */
 void handleMenuNavigation(void) {
 	if (lastSelectedMenuItem != selectedMenuItem) {
@@ -179,7 +241,8 @@ void handleMenuNavigation(void) {
 		lastSelectedMenuItem = selectedMenuItem;
 	}
 
-	if (Button_WasClicked(MENU_BUTTON_GPIO_Port, MENU_BUTTON_Pin,
+	if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
+	MENU_BUTTON_Pin,
 	MENU_BUTTON_ACTIVE_STATE, &menuButtonState)) {
 		selectedMenuItem++;
 
@@ -191,12 +254,14 @@ void handleMenuNavigation(void) {
 		lastSelectedMenuItem = selectedMenuItem;
 	}
 
-	if (Button_WasClicked(ONOFF_BUTTON_GPIO_Port, ONOFF_BUTTON_Pin,
+	if (Button_WasClicked(ONOFF_BUTTON_GPIO_Port,
+	ONOFF_BUTTON_Pin,
 	ONOFF_ACTIVE_STATE, &onoffButtonState)) {
 		toggleOutput();
 	}
 
-	if (Button_WasClicked(select_GPIO_Port, select_Pin,
+	if (Button_WasClicked(select_GPIO_Port,
+	select_Pin,
 	SELECT_ACTIVE_STATE, &selectButtonState)) {
 		switch (selectedMenuItem) {
 		case 0:
@@ -221,34 +286,102 @@ void handleMenuNavigation(void) {
 	}
 }
 
+/**
+ * @brief Changes the frequency value using buttons.
+ *
+ * MENU button increases the frequency.
+ * ON/OFF button decreases the frequency.
+ * SELECT button is handled by enterFrequencyMenu() and returns to the main menu.
+ */
 void setFrequency(void) {
-	ssd1306_Fill(Black);
-	ssd1306_SetCursor(0, 0);
-	ssd1306_WriteString("Set Frequency", Font_7x10, White);
-	ssd1306_UpdateScreen();
+	if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
+	MENU_BUTTON_Pin,
+	MENU_BUTTON_ACTIVE_STATE, &menuButtonState)) {
+		if (frequency <= (FREQUENCY_MAX_HZ - FREQUENCY_STEP_HZ)) {
+			frequency += FREQUENCY_STEP_HZ;
+		} else {
+			frequency = FREQUENCY_MAX_HZ;
+		}
+
+		frequencyScreenNeedsUpdate = 1;
+	}
+
+	if (Button_WasClicked(ONOFF_BUTTON_GPIO_Port,
+	ONOFF_BUTTON_Pin,
+	ONOFF_ACTIVE_STATE, &onoffButtonState)) {
+		if (frequency >= (FREQUENCY_MIN_HZ + FREQUENCY_STEP_HZ)) {
+			frequency -= FREQUENCY_STEP_HZ;
+		} else {
+			frequency = FREQUENCY_MIN_HZ;
+		}
+
+		frequencyScreenNeedsUpdate = 1;
+	}
+
+	if (frequencyScreenNeedsUpdate) {
+		displayFrequencyScreen();
+		frequencyScreenNeedsUpdate = 0;
+	}
 }
 
+/**
+ * @brief Changes the duty cycle value using buttons.
+ *
+ * MENU button increases the duty cycle.
+ * ON/OFF button decreases the duty cycle.
+ * SELECT button is handled by enterDutyCycleMenu() and returns to the main menu.
+ */
 void setDutyCycle(void) {
-	ssd1306_Fill(Black);
-	ssd1306_SetCursor(0, 0);
-	ssd1306_WriteString("Set DutyCycle", Font_7x10, White);
-	ssd1306_UpdateScreen();
+	if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
+	MENU_BUTTON_Pin,
+	MENU_BUTTON_ACTIVE_STATE, &menuButtonState)) {
+		if (dutyCycle <= (DUTYCYCLE_MAX_PERCENT - DUTYCYCLE_STEP_PERCENT)) {
+			dutyCycle += DUTYCYCLE_STEP_PERCENT;
+		} else {
+			dutyCycle = DUTYCYCLE_MAX_PERCENT;
+		}
+
+		dutyCycleScreenNeedsUpdate = 1;
+	}
+
+	if (Button_WasClicked(ONOFF_BUTTON_GPIO_Port,
+	ONOFF_BUTTON_Pin,
+	ONOFF_ACTIVE_STATE, &onoffButtonState)) {
+		if (dutyCycle >= (DUTYCYCLE_MIN_PERCENT + DUTYCYCLE_STEP_PERCENT)) {
+			dutyCycle -= DUTYCYCLE_STEP_PERCENT;
+		} else {
+			dutyCycle = DUTYCYCLE_MIN_PERCENT;
+		}
+
+		dutyCycleScreenNeedsUpdate = 1;
+	}
+
+	if (dutyCycleScreenNeedsUpdate) {
+		displayDutyCycleScreen();
+		dutyCycleScreenNeedsUpdate = 0;
+	}
 }
 
 void showAbout(void) {
 	ssd1306_Fill(Black);
+
 	ssd1306_SetCursor(0, 0);
 	ssd1306_WriteString("Signal Generator", Font_7x10, White);
+
 	ssd1306_SetCursor(0, 17);
 	ssd1306_WriteString("STM32F446RE", Font_7x10, White);
+
 	ssd1306_UpdateScreen();
 }
 
 void showInfo(void) {
 	ssd1306_Fill(Black);
+
 	ssd1306_SetCursor(0, 0);
 	ssd1306_WriteString("Output is ON", Font_7x10, White);
+
 	ssd1306_SetCursor(0, 17);
 	ssd1306_WriteString("Stop output first", Font_7x10, White);
+
 	ssd1306_UpdateScreen();
 }

@@ -59,6 +59,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define button_Pin GPIO_PIN_13
+#define button_GPIO_Port GPIOC
 #define ONOFF_BUTTON_Pin GPIO_PIN_0
 #define ONOFF_BUTTON_GPIO_Port GPIOC
 #define MENU_BUTTON_Pin GPIO_PIN_0
