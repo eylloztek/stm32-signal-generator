@@ -5,64 +5,186 @@
  *      Author: Eylül Öztek
  */
 
+/**
+ * @file menu.c
+ * @brief OLED menu control module for the STM32 signal generator project.
+ *
+ * This file manages the user interface of the signal generator.
+ * It provides menu navigation, waveform selection, frequency adjustment,
+ * duty cycle adjustment, output control, and about/info screens.
+ *
+ * The project supports:
+ * - PWM square wave generation using TIM4 Channel 1
+ * - DAC sine wave generation using DAC OUT1, DMA, and TIM2 trigger
+ * - DAC triangle wave generation using DAC OUT1, DMA, and TIM2 trigger
+ *
+ * Button usage:
+ * - MENU button: menu navigation or value increment
+ * - ON/OFF button: output toggle in main menu or value decrement in submenus
+ * - SELECT button: enter submenu or return to main menu
+ */
+
 #include "menu.h"
 #include "dac_waveform.h"
 
+/**
+ * @brief External TIM4 handle used for PWM output generation.
+ */
 extern TIM_HandleTypeDef htim4;
 
+/**
+ * @brief Main menu item text list.
+ */
 static const char *main_menu_items[] = { "Set Waveform", "Set Frequency",
 		"Set DutyCycle", "About" };
 
+/**
+ * @brief Currently selected main menu item index.
+ */
 uint8_t selectedMenuItem = 0;
+
+/**
+ * @brief Current output frequency in Hz.
+ */
 uint32_t frequency = 1000U;
+
+/**
+ * @brief Current PWM duty cycle in percent.
+ *
+ * This value is only used when the selected waveform is PWM square wave.
+ */
 uint32_t dutyCycle = 50U;
+
+/**
+ * @brief Output state flag.
+ *
+ * Value meaning:
+ * - 1: Output is OFF
+ * - 0: Output is ON
+ */
 uint8_t onoffFlag = 1;
 
-/*
- * Frequency settings
+/**
+ * @brief Minimum allowed frequency in Hz.
  */
 #define FREQUENCY_MIN_HZ             1U
 
+/**
+ * @brief Maximum allowed PWM frequency in Hz.
+ */
 #define PWM_FREQUENCY_MAX_HZ         100000U
+
+/**
+ * @brief PWM frequency adjustment step in Hz.
+ */
 #define PWM_FREQUENCY_STEP_HZ        100U
 
-#define SINE_FREQUENCY_MAX_HZ        10000U
-#define SINE_FREQUENCY_STEP_HZ       10U
-
+/**
+ * @brief Maximum allowed DAC waveform frequency in Hz.
+ */
 #define DAC_FREQUENCY_MAX_HZ         10000U
+
+/**
+ * @brief DAC waveform frequency adjustment step in Hz.
+ */
 #define DAC_FREQUENCY_STEP_HZ        10U
 
-#define DUTYCYCLE_MIN_PERCENT       0U
-#define DUTYCYCLE_MAX_PERCENT       100U
-#define DUTYCYCLE_STEP_PERCENT      5U
+/**
+ * @brief Minimum allowed duty cycle in percent.
+ */
+#define DUTYCYCLE_MIN_PERCENT        0U
 
-static uint8_t frequencyScreenNeedsUpdate = 1;
-static uint8_t dutyCycleScreenNeedsUpdate = 1;
+/**
+ * @brief Maximum allowed duty cycle in percent.
+ */
+#define DUTYCYCLE_MAX_PERCENT        100U
+
+/**
+ * @brief Duty cycle adjustment step in percent.
+ */
+#define DUTYCYCLE_STEP_PERCENT       5U
+
+/**
+ * @brief Screen refresh request flag for waveform selection screen.
+ */
 static uint8_t waveformScreenNeedsUpdate = 1;
 
-#define ABOUT_PAGE_COUNT        2U
+/**
+ * @brief Screen refresh request flag for frequency setting screen.
+ */
+static uint8_t frequencyScreenNeedsUpdate = 1;
 
+/**
+ * @brief Screen refresh request flag for duty cycle setting screen.
+ */
+static uint8_t dutyCycleScreenNeedsUpdate = 1;
+
+/**
+ * @brief Number of about pages.
+ */
+#define ABOUT_PAGE_COUNT             3U
+
+/**
+ * @brief Current about page index.
+ */
 static uint8_t aboutPage = 0;
+
+/**
+ * @brief Screen refresh request flag for about screen.
+ */
 static uint8_t aboutScreenNeedsUpdate = 1;
 
+/**
+ * @brief Button debounce and edge-detection state structure.
+ */
 typedef struct {
-	GPIO_PinState lastRawState;
-	GPIO_PinState stableState;
-	uint32_t lastChangeTick;
-	uint8_t initialized;
+	GPIO_PinState lastRawState; /**< Last directly read GPIO state. */
+	GPIO_PinState stableState; /**< Debounced stable GPIO state. */
+	uint32_t lastChangeTick; /**< HAL tick value of the last raw state change. */
+	uint8_t initialized; /**< Initialization flag for first button read. */
 } ButtonState_t;
 
+/**
+ * @brief Supported waveform types.
+ */
 typedef enum {
-	WAVEFORM_PWM_SQUARE = 0, WAVEFORM_DAC_SINE, WAVEFORM_DAC_TRIANGLE
+	WAVEFORM_PWM_SQUARE = 0, /**< Square wave generated with TIM4 PWM. */
+	WAVEFORM_DAC_SINE, /**< Sine wave generated with DAC, DMA, and TIM2. */
+	WAVEFORM_DAC_TRIANGLE /**< Triangle wave generated with DAC, DMA, and TIM2. */
 } WaveformType_t;
 
+/**
+ * @brief Debounce state for MENU button.
+ */
 static ButtonState_t menuButtonState = { 0 };
+
+/**
+ * @brief Debounce state for SELECT button.
+ */
 static ButtonState_t selectButtonState = { 0 };
+
+/**
+ * @brief Debounce state for ON/OFF button.
+ */
 static ButtonState_t onoffButtonState = { 0 };
+
+/**
+ * @brief Currently selected waveform type.
+ */
 WaveformType_t selectedWaveform = WAVEFORM_PWM_SQUARE;
 
+/**
+ * @brief Last rendered main menu item index.
+ *
+ * This is used to avoid unnecessary OLED refreshes.
+ */
 static uint8_t lastSelectedMenuItem = 255;
 
+/**
+ * @brief Returns the full name of the selected waveform.
+ *
+ * @return Pointer to a constant string containing the waveform name.
+ */
 static const char* getWaveformName(void) {
 	switch (selectedWaveform) {
 	case WAVEFORM_PWM_SQUARE:
@@ -79,6 +201,13 @@ static const char* getWaveformName(void) {
 	}
 }
 
+/**
+ * @brief Returns the short name of the selected waveform.
+ *
+ * This short name is used on compact OLED status lines.
+ *
+ * @return Pointer to a constant string containing the short waveform name.
+ */
 static const char* getWaveformShortName(void) {
 	switch (selectedWaveform) {
 	case WAVEFORM_PWM_SQUARE:
@@ -95,6 +224,13 @@ static const char* getWaveformShortName(void) {
 	}
 }
 
+/**
+ * @brief Returns the maximum allowed frequency for the selected waveform.
+ *
+ * PWM and DAC waveforms use different maximum frequency limits.
+ *
+ * @return Maximum frequency in Hz.
+ */
 static uint32_t getMaxFrequencyForSelectedWaveform(void) {
 	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
 		return PWM_FREQUENCY_MAX_HZ;
@@ -103,6 +239,13 @@ static uint32_t getMaxFrequencyForSelectedWaveform(void) {
 	return DAC_FREQUENCY_MAX_HZ;
 }
 
+/**
+ * @brief Returns the frequency adjustment step for the selected waveform.
+ *
+ * PWM and DAC waveforms use different frequency step values.
+ *
+ * @return Frequency step in Hz.
+ */
 static uint32_t getFrequencyStepForSelectedWaveform(void) {
 	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
 		return PWM_FREQUENCY_STEP_HZ;
@@ -111,6 +254,12 @@ static uint32_t getFrequencyStepForSelectedWaveform(void) {
 	return DAC_FREQUENCY_STEP_HZ;
 }
 
+/**
+ * @brief Clamps the current frequency according to the selected waveform limit.
+ *
+ * If the current frequency is higher than the maximum allowed frequency
+ * for the selected waveform, it is reduced to the valid maximum value.
+ */
 static void clampFrequencyForSelectedWaveform(void) {
 	uint32_t maxFrequency = getMaxFrequencyForSelectedWaveform();
 
@@ -119,6 +268,7 @@ static void clampFrequencyForSelectedWaveform(void) {
 		frequencyScreenNeedsUpdate = 1;
 	}
 }
+
 /**
  * @brief Checks whether a button press event occurred.
  *
@@ -166,6 +316,9 @@ static uint8_t Button_WasClicked(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin,
 /**
  * @brief Displays the main menu items on the OLED screen.
  *
+ * The currently selected menu item is marked with a ">" character.
+ * The bottom line displays the selected waveform short name and frequency.
+ *
  * @param menuCount Number of menu items to display.
  */
 void printMenuItems(uint8_t menuCount) {
@@ -193,6 +346,13 @@ void printMenuItems(uint8_t menuCount) {
 	ssd1306_UpdateScreen();
 }
 
+/**
+ * @brief Displays the waveform selection screen.
+ *
+ * The screen shows the currently selected waveform.
+ * MENU or ON/OFF button changes the waveform.
+ * SELECT button returns to the main menu.
+ */
 static void displayWaveformScreen(void) {
 	ssd1306_Fill(Black);
 
@@ -213,6 +373,9 @@ static void displayWaveformScreen(void) {
 
 /**
  * @brief Displays the frequency setting screen.
+ *
+ * The screen shows the selected waveform mode, current frequency,
+ * and active frequency step.
  */
 static void displayFrequencyScreen(void) {
 	char buffer[24];
@@ -240,6 +403,8 @@ static void displayFrequencyScreen(void) {
 
 /**
  * @brief Displays the duty cycle setting screen.
+ *
+ * This screen is only meaningful for PWM square wave mode.
  */
 static void displayDutyCycleScreen(void) {
 	char buffer[24];
@@ -263,6 +428,12 @@ static void displayDutyCycleScreen(void) {
 	ssd1306_UpdateScreen();
 }
 
+/**
+ * @brief Displays a warning screen when duty cycle is not available.
+ *
+ * Duty cycle is only used by PWM square wave mode.
+ * DAC sine and triangle modes do not use duty cycle.
+ */
 static void showDutyCycleNotAvailable(void) {
 	ssd1306_Fill(Black);
 
@@ -270,10 +441,10 @@ static void showDutyCycleNotAvailable(void) {
 	ssd1306_WriteString("Duty Cycle", Font_7x10, White);
 
 	ssd1306_SetCursor(0, 16);
-	ssd1306_WriteString("not used for", Font_7x10, White);
+	ssd1306_WriteString("only used in", Font_7x10, White);
 
 	ssd1306_SetCursor(0, 30);
-	ssd1306_WriteString("Sine DAC mode", Font_7x10, White);
+	ssd1306_WriteString("PWM mode", Font_7x10, White);
 
 	ssd1306_SetCursor(0, 50);
 	ssd1306_WriteString("S:Back", Font_7x10, White);
@@ -282,7 +453,15 @@ static void showDutyCycleNotAvailable(void) {
 }
 
 /**
- * @brief Toggles the PWM output on or off.
+ * @brief Toggles the output signal on or off.
+ *
+ * If the output is currently ON, this function stops the active waveform.
+ * If the output is currently OFF, this function starts the selected waveform.
+ *
+ * Waveform behavior:
+ * - PWM square wave starts/stops TIM4 PWM Channel 1.
+ * - DAC sine wave starts/stops DAC DMA waveform generation.
+ * - DAC triangle wave starts/stops DAC DMA waveform generation.
  */
 static void toggleOutput(void) {
 	if (onoffFlag == 0) {
@@ -318,6 +497,11 @@ static void toggleOutput(void) {
 	}
 }
 
+/**
+ * @brief Opens the waveform selection menu.
+ *
+ * The waveform cannot be changed while output is active.
+ */
 static void enterWaveformMenu(void) {
 	waveformScreenNeedsUpdate = 1;
 
@@ -340,6 +524,8 @@ static void enterWaveformMenu(void) {
 
 /**
  * @brief Opens the frequency setting menu.
+ *
+ * The frequency cannot be edited while output is active.
  */
 static void enterFrequencyMenu(void) {
 	frequencyScreenNeedsUpdate = 1;
@@ -363,6 +549,9 @@ static void enterFrequencyMenu(void) {
 
 /**
  * @brief Opens the duty cycle setting menu.
+ *
+ * Duty cycle can only be edited in PWM square wave mode.
+ * In DAC waveform modes, a warning screen is displayed.
  */
 static void enterDutyCycleMenu(void) {
 	dutyCycleScreenNeedsUpdate = 1;
@@ -375,21 +564,7 @@ static void enterDutyCycleMenu(void) {
 		}
 
 		if (selectedWaveform != WAVEFORM_PWM_SQUARE) {
-			ssd1306_Fill(Black);
-
-			ssd1306_SetCursor(0, 0);
-			ssd1306_WriteString("Duty Cycle", Font_7x10, White);
-
-			ssd1306_SetCursor(0, 16);
-			ssd1306_WriteString("only used in", Font_7x10, White);
-
-			ssd1306_SetCursor(0, 30);
-			ssd1306_WriteString("PWM mode", Font_7x10, White);
-
-			ssd1306_SetCursor(0, 50);
-			ssd1306_WriteString("S:Back", Font_7x10, White);
-
-			ssd1306_UpdateScreen();
+			showDutyCycleNotAvailable();
 
 			if (Button_WasClicked(select_GPIO_Port,
 			select_Pin,
@@ -411,7 +586,10 @@ static void enterDutyCycleMenu(void) {
 }
 
 /**
- * @brief Opens the about page.
+ * @brief Opens the about screen.
+ *
+ * MENU button changes the about page.
+ * SELECT button returns to the main menu.
  */
 static void enterAboutMenu(void) {
 	aboutPage = 0;
@@ -441,11 +619,14 @@ static void enterAboutMenu(void) {
 }
 
 /**
- * @brief Handles menu navigation and menu selection.
+ * @brief Handles main menu navigation and menu selection.
  *
- * The MENU button moves the selected item down by one step.
- * The SELECT button enters the selected menu item.
- * The ON/OFF button toggles the PWM output only in the main menu.
+ * This function should be called repeatedly inside the main loop.
+ *
+ * Button behavior in the main menu:
+ * - MENU button moves the selected item down by one step.
+ * - SELECT button enters the selected submenu.
+ * - ON/OFF button toggles the currently selected waveform output.
  */
 void handleMenuNavigation(void) {
 	if (lastSelectedMenuItem != selectedMenuItem) {
@@ -502,6 +683,16 @@ void handleMenuNavigation(void) {
 	}
 }
 
+/**
+ * @brief Changes the selected waveform type.
+ *
+ * MENU or ON/OFF button cycles through:
+ * - PWM square wave
+ * - DAC sine wave
+ * - DAC triangle wave
+ *
+ * SELECT button is handled by enterWaveformMenu() and returns to the main menu.
+ */
 void setWaveform(void) {
 	if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
 	MENU_BUTTON_Pin,
@@ -535,9 +726,12 @@ void setWaveform(void) {
 /**
  * @brief Changes the frequency value using buttons.
  *
- * MENU button increases the frequency.
- * ON/OFF button decreases the frequency.
- * SELECT button is handled by enterFrequencyMenu() and returns to the main menu.
+ * Frequency limits and step size depend on the selected waveform.
+ *
+ * Button behavior:
+ * - MENU button increases the frequency.
+ * - ON/OFF button decreases the frequency.
+ * - SELECT button is handled by enterFrequencyMenu().
  */
 void setFrequency(void) {
 	uint32_t maxFrequency = getMaxFrequencyForSelectedWaveform();
@@ -576,11 +770,14 @@ void setFrequency(void) {
 }
 
 /**
- * @brief Changes the duty cycle value using buttons.
+ * @brief Changes the PWM duty cycle value using buttons.
  *
- * MENU button increases the duty cycle.
- * ON/OFF button decreases the duty cycle.
- * SELECT button is handled by enterDutyCycleMenu() and returns to the main menu.
+ * Duty cycle is only used in PWM square wave mode.
+ *
+ * Button behavior:
+ * - MENU button increases the duty cycle.
+ * - ON/OFF button decreases the duty cycle.
+ * - SELECT button is handled by enterDutyCycleMenu().
  */
 void setDutyCycle(void) {
 	if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
@@ -613,6 +810,14 @@ void setDutyCycle(void) {
 	}
 }
 
+/**
+ * @brief Displays the about screen.
+ *
+ * The about screen has multiple pages:
+ * - Page 1: current signal generator status
+ * - Page 2: output type information
+ * - Page 3: button controls
+ */
 void showAbout(void) {
 	char buffer[24];
 
@@ -690,6 +895,12 @@ void showAbout(void) {
 	aboutScreenNeedsUpdate = 0;
 }
 
+/**
+ * @brief Displays a warning message when editing is not allowed.
+ *
+ * This screen is shown when the user tries to edit waveform settings
+ * while the output signal is active.
+ */
 void showInfo(void) {
 	ssd1306_Fill(Black);
 
