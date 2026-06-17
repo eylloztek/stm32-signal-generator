@@ -1,0 +1,42 @@
+/*
+ * dac_waveform.h
+ *
+ *  Created on: Jun 17, 2026
+ *      Author: Eylül Öztek
+ */
+
+#ifndef INC_DAC_WAVEFORM_H_
+#define INC_DAC_WAVEFORM_H_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "main.h"
+#include <stdint.h>
+
+#define DAC_WAVEFORM_SINE_SAMPLE_COUNT     100U
+
+/*
+ * With 100 samples, high-frequency sine generation becomes limited.
+ * Example:
+ * 1 kHz sine  -> 100 kHz DAC update rate
+ * 10 kHz sine -> 1 MHz DAC update rate
+ */
+#define DAC_WAVEFORM_MIN_FREQUENCY_HZ      1U
+#define DAC_WAVEFORM_MAX_FREQUENCY_HZ      10000U
+
+typedef enum {
+	DAC_WAVEFORM_OK = 0, DAC_WAVEFORM_ERROR, DAC_WAVEFORM_INVALID_PARAM
+} DAC_Waveform_Status_t;
+
+DAC_Waveform_Status_t DAC_Waveform_Init(void);
+DAC_Waveform_Status_t DAC_Waveform_StartSine(uint32_t frequencyHz);
+DAC_Waveform_Status_t DAC_Waveform_Stop(void);
+DAC_Waveform_Status_t DAC_Waveform_SetFrequency(uint32_t frequencyHz);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* INC_DAC_WAVEFORM_H_ */

@@ -6,11 +6,12 @@
  */
 
 #include "menu.h"
+#include "dac_waveform.h"
 
 extern TIM_HandleTypeDef htim4;
 
-static const char *main_menu_items[] = { "Set Frequency", "Set DutyCycle",
-		"About" };
+static const char *main_menu_items[] = { "Set Waveform", "Set Frequency",
+		"Set DutyCycle", "About" };
 
 uint8_t selectedMenuItem = 0;
 uint32_t frequency = 1000U;
@@ -20,9 +21,13 @@ uint8_t onoffFlag = 1;
 /*
  * Frequency settings
  */
-#define FREQUENCY_MIN_HZ       1U
-#define FREQUENCY_MAX_HZ       100000U
-#define FREQUENCY_STEP_HZ      100U
+#define FREQUENCY_MIN_HZ             1U
+
+#define PWM_FREQUENCY_MAX_HZ         100000U
+#define PWM_FREQUENCY_STEP_HZ        100U
+
+#define SINE_FREQUENCY_MAX_HZ        10000U
+#define SINE_FREQUENCY_STEP_HZ       10U
 
 #define DUTYCYCLE_MIN_PERCENT       0U
 #define DUTYCYCLE_MAX_PERCENT       100U
@@ -30,6 +35,7 @@ uint8_t onoffFlag = 1;
 
 static uint8_t frequencyScreenNeedsUpdate = 1;
 static uint8_t dutyCycleScreenNeedsUpdate = 1;
+static uint8_t waveformScreenNeedsUpdate = 1;
 
 #define ABOUT_PAGE_COUNT        2U
 
@@ -43,11 +49,57 @@ typedef struct {
 	uint8_t initialized;
 } ButtonState_t;
 
+typedef enum {
+	WAVEFORM_PWM_SQUARE = 0, WAVEFORM_DAC_SINE
+} WaveformType_t;
+
 static ButtonState_t menuButtonState = { 0 };
 static ButtonState_t selectButtonState = { 0 };
 static ButtonState_t onoffButtonState = { 0 };
+WaveformType_t selectedWaveform = WAVEFORM_PWM_SQUARE;
 
 static uint8_t lastSelectedMenuItem = 255;
+
+static const char* getWaveformName(void) {
+	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+		return "Square PWM";
+	}
+
+	return "Sine DAC";
+}
+
+static const char* getWaveformShortName(void) {
+	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+		return "PWM";
+	}
+
+	return "SINE";
+}
+
+static uint32_t getMaxFrequencyForSelectedWaveform(void) {
+	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+		return PWM_FREQUENCY_MAX_HZ;
+	}
+
+	return SINE_FREQUENCY_MAX_HZ;
+}
+
+static uint32_t getFrequencyStepForSelectedWaveform(void) {
+	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+		return PWM_FREQUENCY_STEP_HZ;
+	}
+
+	return SINE_FREQUENCY_STEP_HZ;
+}
+
+static void clampFrequencyForSelectedWaveform(void) {
+	uint32_t maxFrequency = getMaxFrequencyForSelectedWaveform();
+
+	if (frequency > maxFrequency) {
+		frequency = maxFrequency;
+		frequencyScreenNeedsUpdate = 1;
+	}
+}
 
 /**
  * @brief Checks whether a button press event occurred.
@@ -99,10 +151,12 @@ static uint8_t Button_WasClicked(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin,
  * @param menuCount Number of menu items to display.
  */
 void printMenuItems(uint8_t menuCount) {
+	char buffer[24];
+
 	ssd1306_Fill(Black);
 
 	for (uint8_t i = 0; i < menuCount; i++) {
-		ssd1306_SetCursor(0, i * 20);
+		ssd1306_SetCursor(0, i * 12);
 
 		if (i == selectedMenuItem) {
 			ssd1306_WriteString("> ", Font_7x10, White);
@@ -112,6 +166,29 @@ void printMenuItems(uint8_t menuCount) {
 
 		ssd1306_WriteString((char*) main_menu_items[i], Font_7x10, White);
 	}
+
+	ssd1306_SetCursor(0, 52);
+	snprintf(buffer, sizeof(buffer), "%s %luHz", getWaveformShortName(),
+			(unsigned long) frequency);
+	ssd1306_WriteString(buffer, Font_7x10, White);
+
+	ssd1306_UpdateScreen();
+}
+
+static void displayWaveformScreen(void) {
+	ssd1306_Fill(Black);
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Set Waveform", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 18);
+	ssd1306_WriteString((char*) getWaveformName(), Font_11x18, White);
+
+	ssd1306_SetCursor(0, 44);
+	ssd1306_WriteString("M/O:Change", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 54);
+	ssd1306_WriteString("S:Back", Font_7x10, White);
 
 	ssd1306_UpdateScreen();
 }
@@ -127,12 +204,18 @@ static void displayFrequencyScreen(void) {
 	ssd1306_SetCursor(0, 0);
 	ssd1306_WriteString("Set Frequency", Font_7x10, White);
 
-	ssd1306_SetCursor(0, 20);
-	snprintf(buffer, sizeof(buffer), "%lu Hz", (unsigned long) frequency);
+	ssd1306_SetCursor(0, 12);
+	snprintf(buffer, sizeof(buffer), "Mode:%s", getWaveformShortName());
 	ssd1306_WriteString(buffer, Font_7x10, White);
 
-	ssd1306_SetCursor(0, 40);
-	ssd1306_WriteString("M:+ O:- S:Back", Font_7x10, White);
+	ssd1306_SetCursor(0, 28);
+	snprintf(buffer, sizeof(buffer), "%lu Hz", (unsigned long) frequency);
+	ssd1306_WriteString(buffer, Font_11x18, White);
+
+	ssd1306_SetCursor(0, 50);
+	snprintf(buffer, sizeof(buffer), "Step:%lu S:Back",
+			(unsigned long) getFrequencyStepForSelectedWaveform());
+	ssd1306_WriteString(buffer, Font_7x10, White);
 
 	ssd1306_UpdateScreen();
 }
@@ -148,12 +231,34 @@ static void displayDutyCycleScreen(void) {
 	ssd1306_SetCursor(0, 0);
 	ssd1306_WriteString("Set DutyCycle", Font_7x10, White);
 
-	ssd1306_SetCursor(0, 20);
-	snprintf(buffer, sizeof(buffer), "%lu %%", (unsigned long) dutyCycle);
+	ssd1306_SetCursor(0, 12);
+	snprintf(buffer, sizeof(buffer), "Mode:%s", getWaveformShortName());
 	ssd1306_WriteString(buffer, Font_7x10, White);
 
-	ssd1306_SetCursor(0, 40);
+	ssd1306_SetCursor(0, 28);
+	snprintf(buffer, sizeof(buffer), "%lu %%", (unsigned long) dutyCycle);
+	ssd1306_WriteString(buffer, Font_11x18, White);
+
+	ssd1306_SetCursor(0, 50);
 	ssd1306_WriteString("M:+ O:- S:Back", Font_7x10, White);
+
+	ssd1306_UpdateScreen();
+}
+
+static void showDutyCycleNotAvailable(void) {
+	ssd1306_Fill(Black);
+
+	ssd1306_SetCursor(0, 0);
+	ssd1306_WriteString("Duty Cycle", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 16);
+	ssd1306_WriteString("not used for", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 30);
+	ssd1306_WriteString("Sine DAC mode", Font_7x10, White);
+
+	ssd1306_SetCursor(0, 50);
+	ssd1306_WriteString("S:Back", Font_7x10, White);
 
 	ssd1306_UpdateScreen();
 }
@@ -163,12 +268,48 @@ static void displayDutyCycleScreen(void) {
  */
 static void toggleOutput(void) {
 	if (onoffFlag == 0) {
-		pwmChannelStop(&htim4, TIM_CHANNEL_1);
+		if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+			pwmChannelStop(&htim4, TIM_CHANNEL_1);
+		} else {
+			DAC_Waveform_Stop();
+		}
+
 		onoffFlag = 1;
 	} else {
-		setPWMFreqDuty(frequency, dutyCycle);
-		pwmChannelStart(&htim4, TIM_CHANNEL_1);
-		onoffFlag = 0;
+		clampFrequencyForSelectedWaveform();
+
+		if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+			setPWMFreqDuty(frequency, dutyCycle);
+			pwmChannelStart(&htim4, TIM_CHANNEL_1);
+			onoffFlag = 0;
+		} else {
+			if (DAC_Waveform_StartSine(frequency) == DAC_WAVEFORM_OK) {
+				onoffFlag = 0;
+			} else {
+				showInfo();
+				HAL_Delay(700);
+			}
+		}
+	}
+}
+
+static void enterWaveformMenu(void) {
+	waveformScreenNeedsUpdate = 1;
+
+	while (1) {
+		if (onoffFlag == 0) {
+			showInfo();
+			HAL_Delay(700);
+			break;
+		}
+
+		setWaveform();
+
+		if (Button_WasClicked(select_GPIO_Port,
+		select_Pin,
+		SELECT_ACTIVE_STATE, &selectButtonState)) {
+			break;
+		}
 	}
 }
 
@@ -206,6 +347,18 @@ static void enterDutyCycleMenu(void) {
 			showInfo();
 			HAL_Delay(700);
 			break;
+		}
+
+		if (selectedWaveform == WAVEFORM_DAC_SINE) {
+			showDutyCycleNotAvailable();
+
+			if (Button_WasClicked(select_GPIO_Port,
+			select_Pin,
+			SELECT_ACTIVE_STATE, &selectButtonState)) {
+				break;
+			}
+
+			continue;
 		}
 
 		setDutyCycle();
@@ -285,14 +438,18 @@ void handleMenuNavigation(void) {
 	SELECT_ACTIVE_STATE, &selectButtonState)) {
 		switch (selectedMenuItem) {
 		case 0:
-			enterFrequencyMenu();
+			enterWaveformMenu();
 			break;
 
 		case 1:
-			enterDutyCycleMenu();
+			enterFrequencyMenu();
 			break;
 
 		case 2:
+			enterDutyCycleMenu();
+			break;
+
+		case 3:
 			enterAboutMenu();
 			break;
 
@@ -306,6 +463,34 @@ void handleMenuNavigation(void) {
 	}
 }
 
+void setWaveform(void) {
+	if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
+	MENU_BUTTON_Pin,
+	MENU_BUTTON_ACTIVE_STATE, &menuButtonState)
+			|| Button_WasClicked(ONOFF_BUTTON_GPIO_Port,
+			ONOFF_BUTTON_Pin,
+			ONOFF_ACTIVE_STATE, &onoffButtonState)) {
+
+		if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+			selectedWaveform = WAVEFORM_DAC_SINE;
+		} else {
+			selectedWaveform = WAVEFORM_PWM_SQUARE;
+		}
+
+		clampFrequencyForSelectedWaveform();
+
+		waveformScreenNeedsUpdate = 1;
+		frequencyScreenNeedsUpdate = 1;
+		dutyCycleScreenNeedsUpdate = 1;
+		aboutScreenNeedsUpdate = 1;
+	}
+
+	if (waveformScreenNeedsUpdate) {
+		displayWaveformScreen();
+		waveformScreenNeedsUpdate = 0;
+	}
+}
+
 /**
  * @brief Changes the frequency value using buttons.
  *
@@ -314,13 +499,18 @@ void handleMenuNavigation(void) {
  * SELECT button is handled by enterFrequencyMenu() and returns to the main menu.
  */
 void setFrequency(void) {
+	uint32_t maxFrequency = getMaxFrequencyForSelectedWaveform();
+	uint32_t stepFrequency = getFrequencyStepForSelectedWaveform();
+
+	clampFrequencyForSelectedWaveform();
+
 	if (Button_WasClicked(MENU_BUTTON_GPIO_Port,
 	MENU_BUTTON_Pin,
 	MENU_BUTTON_ACTIVE_STATE, &menuButtonState)) {
-		if (frequency <= (FREQUENCY_MAX_HZ - FREQUENCY_STEP_HZ)) {
-			frequency += FREQUENCY_STEP_HZ;
+		if (frequency <= (maxFrequency - stepFrequency)) {
+			frequency += stepFrequency;
 		} else {
-			frequency = FREQUENCY_MAX_HZ;
+			frequency = maxFrequency;
 		}
 
 		frequencyScreenNeedsUpdate = 1;
@@ -329,8 +519,8 @@ void setFrequency(void) {
 	if (Button_WasClicked(ONOFF_BUTTON_GPIO_Port,
 	ONOFF_BUTTON_Pin,
 	ONOFF_ACTIVE_STATE, &onoffButtonState)) {
-		if (frequency >= (FREQUENCY_MIN_HZ + FREQUENCY_STEP_HZ)) {
-			frequency -= FREQUENCY_STEP_HZ;
+		if (frequency >= (FREQUENCY_MIN_HZ + stepFrequency)) {
+			frequency -= stepFrequency;
 		} else {
 			frequency = FREQUENCY_MIN_HZ;
 		}
@@ -396,23 +586,45 @@ void showAbout(void) {
 		ssd1306_WriteString("Signal Generator", Font_7x10, White);
 
 		ssd1306_SetCursor(0, 12);
-		ssd1306_WriteString("STM32 Nucleo", Font_7x10, White);
+		snprintf(buffer, sizeof(buffer), "Mode:%s", getWaveformShortName());
+		ssd1306_WriteString(buffer, Font_7x10, White);
 
 		ssd1306_SetCursor(0, 24);
-		ssd1306_WriteString("F446RE / TIM4 PWM", Font_7x10, White);
-
-		ssd1306_SetCursor(0, 36);
 		snprintf(buffer, sizeof(buffer), "Freq:%luHz",
 				(unsigned long) frequency);
 		ssd1306_WriteString(buffer, Font_7x10, White);
 
-		ssd1306_SetCursor(0, 48);
-		snprintf(buffer, sizeof(buffer), "Duty:%lu%%",
-				(unsigned long) dutyCycle);
+		ssd1306_SetCursor(0, 36);
+
+		if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+			snprintf(buffer, sizeof(buffer), "Duty:%lu%%",
+					(unsigned long) dutyCycle);
+		} else {
+			snprintf(buffer, sizeof(buffer), "Duty:N/A");
+		}
+
 		ssd1306_WriteString(buffer, Font_7x10, White);
 
-		ssd1306_SetCursor(86, 48);
-		ssd1306_WriteString("1/2", Font_7x10, White);
+		ssd1306_SetCursor(0, 48);
+		ssd1306_WriteString("STM32F446RE", Font_7x10, White);
+
+		ssd1306_SetCursor(98, 48);
+		ssd1306_WriteString("1/3", Font_7x10, White);
+	} else if (aboutPage == 1) {
+		ssd1306_SetCursor(0, 0);
+		ssd1306_WriteString("Output Types", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 14);
+		ssd1306_WriteString("PWM : TIM4 CH1", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 28);
+		ssd1306_WriteString("SINE: DAC OUT1", Font_7x10, White);
+
+		ssd1306_SetCursor(0, 42);
+		ssd1306_WriteString("DAC trig: TIM2", Font_7x10, White);
+
+		ssd1306_SetCursor(98, 48);
+		ssd1306_WriteString("2/3", Font_7x10, White);
 	} else {
 		ssd1306_SetCursor(0, 0);
 		ssd1306_WriteString("Controls", Font_7x10, White);
@@ -421,7 +633,7 @@ void showAbout(void) {
 		ssd1306_WriteString("MENU : Next/+", Font_7x10, White);
 
 		ssd1306_SetCursor(0, 24);
-		ssd1306_WriteString("ONOFF: Output/-", Font_7x10, White);
+		ssd1306_WriteString("ONOFF: Out/-", Font_7x10, White);
 
 		ssd1306_SetCursor(0, 36);
 		ssd1306_WriteString("SEL  : Enter/Back", Font_7x10, White);
@@ -430,7 +642,7 @@ void showAbout(void) {
 		ssd1306_WriteString("M:Next S:Back", Font_7x10, White);
 
 		ssd1306_SetCursor(98, 48);
-		ssd1306_WriteString("2/2", Font_7x10, White);
+		ssd1306_WriteString("3/3", Font_7x10, White);
 	}
 
 	ssd1306_UpdateScreen();

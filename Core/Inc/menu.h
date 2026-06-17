@@ -19,7 +19,7 @@ extern "C" {
 #include "stdio.h"
 #include "pwm.h"
 
-#define MAIN_MENU_ITEM_COUNT        3U
+#define MAIN_MENU_ITEM_COUNT        4U
 #define MENU_BUTTON_DEBOUNCE_MS     50U
 
 /*
@@ -37,6 +37,7 @@ extern "C" {
 
 void printMenuItems(uint8_t menuCount);
 void handleMenuNavigation(void);
+void setWaveform(void);
 void setFrequency(void);
 void setDutyCycle(void);
 void showAbout(void);
