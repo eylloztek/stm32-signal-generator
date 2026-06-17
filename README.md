@@ -236,6 +236,92 @@ For continuous waveform generation, the DAC DMA mode should be configured as cir
 
 ---
 
+### Independent Watchdog Usage
+
+This project uses the STM32 Independent Watchdog, also known as IWDG, to improve runtime reliability.
+
+The watchdog is a hardware timer that resets the microcontroller if the software stops refreshing it within a configured time window. This is useful in embedded systems because it can recover the system from unexpected software lockups, infinite loops, peripheral blocking states, or other runtime faults.
+
+In this project, the watchdog is initialized during startup:
+
+```c
+MX_IWDG_Init();
+```
+
+The watchdog is refreshed inside the main loop:
+
+```c
+while (1) {
+    handleMenuNavigation();
+    HAL_IWDG_Refresh(&hiwdg);
+}
+```
+
+This means the program must keep running normally through the main loop. If the firmware gets stuck and cannot reach HAL_IWDG_Refresh(&hiwdg), the watchdog timer expires and the STM32 automatically resets.
+
+#### Watchdog Configuration
+
+The current IWDG configuration is:
+
+```text
+hiwdg.Instance = IWDG;
+hiwdg.Init.Prescaler = IWDG_PRESCALER_256;
+hiwdg.Init.Reload = 1249;
+```
+
+The Independent Watchdog is clocked from the LSI oscillator. The approximate timeout can be calculated with:
+
+```text
+IWDG timeout = (Reload + 1) × Prescaler / LSI frequency
+```
+
+Assuming an approximate LSI frequency of 32 kHz:
+
+```text
+IWDG timeout = (1249 + 1) × 256 / 32000
+IWDG timeout ≈ 10 seconds
+```
+
+So, if the firmware does not refresh the watchdog for about 10 seconds, the MCU will reset.
+
+#### Why Watchdog Is Useful in This Project
+
+The project uses multiple peripherals:
+
+* OLED display over I2C
+* Timer-based PWM output
+* DAC output
+* DMA waveform transfer
+* Button-based menu control
+* TIM2-triggered DAC waveform generation
+
+In embedded projects with several peripherals, a blocking peripheral call or unexpected software state may cause the program to freeze. The watchdog provides a basic recovery mechanism by resetting the system if the main loop stops running correctly.
+
+#### Important Note About Long Delays
+
+The splash screen currently uses a delay at startup. If the delay duration becomes longer than the watchdog timeout, the watchdog may reset the MCU before the main loop starts.
+
+For long startup delays, either keep the delay shorter than the watchdog timeout or refresh the watchdog during the delay.
+
+Example:
+
+```c
+for (uint8_t i = 0; i < 5; i++) {
+    HAL_IWDG_Refresh(&hiwdg);
+    HAL_Delay(1000);
+}
+```
+
+This keeps the watchdog alive during a 5-second splash screen.
+
+#### Watchdog Design Recommendation
+
+The watchdog should not be refreshed inside every low-level driver function. It is usually better to refresh it from the main control loop or from a reliable scheduler task. This makes the watchdog more meaningful, because it confirms that the main application flow is still running.
+
+In this project, refreshing the watchdog in the main loop is acceptable because the program structure is simple and menu-driven.
+
+---
+
 ### OLED Display
 
 The OLED display is driven over I2C using an SSD1306 driver.
