@@ -29,6 +29,9 @@ uint8_t onoffFlag = 1;
 #define SINE_FREQUENCY_MAX_HZ        10000U
 #define SINE_FREQUENCY_STEP_HZ       10U
 
+#define DAC_FREQUENCY_MAX_HZ         10000U
+#define DAC_FREQUENCY_STEP_HZ        10U
+
 #define DUTYCYCLE_MIN_PERCENT       0U
 #define DUTYCYCLE_MAX_PERCENT       100U
 #define DUTYCYCLE_STEP_PERCENT      5U
@@ -50,7 +53,7 @@ typedef struct {
 } ButtonState_t;
 
 typedef enum {
-	WAVEFORM_PWM_SQUARE = 0, WAVEFORM_DAC_SINE
+	WAVEFORM_PWM_SQUARE = 0, WAVEFORM_DAC_SINE, WAVEFORM_DAC_TRIANGLE
 } WaveformType_t;
 
 static ButtonState_t menuButtonState = { 0 };
@@ -61,19 +64,35 @@ WaveformType_t selectedWaveform = WAVEFORM_PWM_SQUARE;
 static uint8_t lastSelectedMenuItem = 255;
 
 static const char* getWaveformName(void) {
-	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+	switch (selectedWaveform) {
+	case WAVEFORM_PWM_SQUARE:
 		return "Square PWM";
-	}
 
-	return "Sine DAC";
+	case WAVEFORM_DAC_SINE:
+		return "Sine DAC";
+
+	case WAVEFORM_DAC_TRIANGLE:
+		return "Triangle DAC";
+
+	default:
+		return "Unknown";
+	}
 }
 
 static const char* getWaveformShortName(void) {
-	if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
+	switch (selectedWaveform) {
+	case WAVEFORM_PWM_SQUARE:
 		return "PWM";
-	}
 
-	return "SINE";
+	case WAVEFORM_DAC_SINE:
+		return "SINE";
+
+	case WAVEFORM_DAC_TRIANGLE:
+		return "TRI";
+
+	default:
+		return "UNK";
+	}
 }
 
 static uint32_t getMaxFrequencyForSelectedWaveform(void) {
@@ -81,7 +100,7 @@ static uint32_t getMaxFrequencyForSelectedWaveform(void) {
 		return PWM_FREQUENCY_MAX_HZ;
 	}
 
-	return SINE_FREQUENCY_MAX_HZ;
+	return DAC_FREQUENCY_MAX_HZ;
 }
 
 static uint32_t getFrequencyStepForSelectedWaveform(void) {
@@ -89,7 +108,7 @@ static uint32_t getFrequencyStepForSelectedWaveform(void) {
 		return PWM_FREQUENCY_STEP_HZ;
 	}
 
-	return SINE_FREQUENCY_STEP_HZ;
+	return DAC_FREQUENCY_STEP_HZ;
 }
 
 static void clampFrequencyForSelectedWaveform(void) {
@@ -100,7 +119,6 @@ static void clampFrequencyForSelectedWaveform(void) {
 		frequencyScreenNeedsUpdate = 1;
 	}
 }
-
 /**
  * @brief Checks whether a button press event occurred.
  *
@@ -282,8 +300,15 @@ static void toggleOutput(void) {
 			setPWMFreqDuty(frequency, dutyCycle);
 			pwmChannelStart(&htim4, TIM_CHANNEL_1);
 			onoffFlag = 0;
-		} else {
+		} else if (selectedWaveform == WAVEFORM_DAC_SINE) {
 			if (DAC_Waveform_StartSine(frequency) == DAC_WAVEFORM_OK) {
+				onoffFlag = 0;
+			} else {
+				showInfo();
+				HAL_Delay(700);
+			}
+		} else if (selectedWaveform == WAVEFORM_DAC_TRIANGLE) {
+			if (DAC_Waveform_StartTriangle(frequency) == DAC_WAVEFORM_OK) {
 				onoffFlag = 0;
 			} else {
 				showInfo();
@@ -349,8 +374,22 @@ static void enterDutyCycleMenu(void) {
 			break;
 		}
 
-		if (selectedWaveform == WAVEFORM_DAC_SINE) {
-			showDutyCycleNotAvailable();
+		if (selectedWaveform != WAVEFORM_PWM_SQUARE) {
+			ssd1306_Fill(Black);
+
+			ssd1306_SetCursor(0, 0);
+			ssd1306_WriteString("Duty Cycle", Font_7x10, White);
+
+			ssd1306_SetCursor(0, 16);
+			ssd1306_WriteString("only used in", Font_7x10, White);
+
+			ssd1306_SetCursor(0, 30);
+			ssd1306_WriteString("PWM mode", Font_7x10, White);
+
+			ssd1306_SetCursor(0, 50);
+			ssd1306_WriteString("S:Back", Font_7x10, White);
+
+			ssd1306_UpdateScreen();
 
 			if (Button_WasClicked(select_GPIO_Port,
 			select_Pin,
@@ -473,6 +512,8 @@ void setWaveform(void) {
 
 		if (selectedWaveform == WAVEFORM_PWM_SQUARE) {
 			selectedWaveform = WAVEFORM_DAC_SINE;
+		} else if (selectedWaveform == WAVEFORM_DAC_SINE) {
+			selectedWaveform = WAVEFORM_DAC_TRIANGLE;
 		} else {
 			selectedWaveform = WAVEFORM_PWM_SQUARE;
 		}
